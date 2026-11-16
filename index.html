@@ -9,6 +9,32 @@
 <meta name="description" content="검은 캔버스에 선을 그으면 그 선을 따라 전나무 가지와 오너먼트, 반짝이는 전구가 자라는 크리스마스 드로잉.">
 <meta property="og:title" content="Tree Brush">
 <meta property="og:description" content="선을 그으면 크리스마스 트리가 자라나요.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://baezzang1026.github.io/merry-christmas/">
+<script>
+/* Messenger in-app browsers (KakaoTalk, Instagram, etc.) can block or break the page.
+   Hand the page to the phone's real browser when opened inside one. */
+(function () {
+  var ua = navigator.userAgent || '';
+  var url = location.href;
+  var inApp = /KAKAOTALK|Instagram|FBAN|FBAV|FB_IAB|Line\/|NAVER\(inapp|everytimeApp|DaumApps|Snapchat|Twitter/i.test(ua);
+  if (!inApp) return;
+  if (/KAKAOTALK/i.test(ua)) {
+    location.href = 'kakaotalk://web/openExternal?url=' + encodeURIComponent(url);
+  } else if (/Android/i.test(ua)) {
+    location.href = 'intent://' + url.replace(/^https?:\/\//, '') + '#Intent;scheme=https;package=com.android.chrome;S.browser_fallback_url=' + encodeURIComponent(url) + ';end';
+  }
+  // If the hand-off did not happen (e.g. iPhone Instagram), show how to open it manually.
+  document.addEventListener('DOMContentLoaded', function () {
+    var b = document.createElement('div');
+    b.setAttribute('role', 'note');
+    b.style.cssText = 'position:fixed;left:12px;right:12px;top:calc(env(safe-area-inset-top,0px) + 12px);z-index:50;padding:12px 14px;border-radius:12px;background:rgba(20,16,8,.92);border:1px solid rgba(232,194,106,.5);color:#f3ead6;font:14px/1.5 "Noto Sans KR",system-ui,sans-serif;text-align:center';
+    b.innerHTML = '앱 안에서는 제대로 안 열릴 수 있어요.<br>오른쪽 위 <b>⋮</b> 또는 <b>⋯</b> 메뉴에서 <b style="color:#e8c26a">다른 브라우저로 열기</b>를 눌러 주세요.';
+    b.addEventListener('click', function () { b.remove(); });
+    document.body.appendChild(b);
+  });
+})();
+</script>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' fill='%23000'/%3E%3Cpath d='M32 6 50 50H14z' fill='%231f5a33'/%3E%3Cpath d='M32 2l3 7h7l-6 4 2 7-6-4-6 4 2-7-6-4h7z' fill='%23e8c26a'/%3E%3Ccircle cx='26' cy='36' r='3' fill='%23c8172c'/%3E%3Ccircle cx='38' cy='42' r='3' fill='%23d2a03a'/%3E%3C/svg%3E">
 <style>
 *{box-sizing:border-box}
