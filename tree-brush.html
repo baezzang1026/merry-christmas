@@ -1,0 +1,924 @@
+<title>Tree Brush</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Gowun+Batang:wght@400;700&family=Noto+Sans+KR:wght@400;500&display=swap">
+<style>
+/* Layout: full-bleed black night canvas; a quiet title top-left, a slim gold control rail bottom-center. Single dark look by design. */
+:root {
+  --bg: #000;
+  --fg: #f3ead6;
+  --muted: #9a917f;
+  --gold: #e8c26a;
+  --gold-line: rgba(232, 194, 106, 0.28);
+  --panel: rgba(12, 10, 6, 0.72);
+  --display: "Gowun Batang", "Batang", serif;
+  --body: "Noto Sans KR", "Malgun Gothic", system-ui, sans-serif;
+  color-scheme: dark;
+}
+html, body { height: 100%; }
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--body);
+  overflow: hidden;
+  -webkit-user-select: none;
+  user-select: none;
+}
+canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; pointer-events: none; }
+#fx { pointer-events: auto; touch-action: none; cursor: crosshair; }
+
+.title {
+  position: fixed;
+  top: calc(env(safe-area-inset-top, 0px) + 20px);
+  left: max(20px, env(safe-area-inset-left, 0px));
+  right: max(20px, env(safe-area-inset-right, 0px));
+  pointer-events: none;
+  display: grid;
+  gap: 6px;
+}
+.title h1 {
+  margin: 0;
+  font-family: var(--display);
+  font-weight: 700;
+  font-size: clamp(22px, 3vw, 30px);
+  letter-spacing: 0.02em;
+  color: var(--gold);
+  text-wrap: balance;
+}
+.title p {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+  max-width: 34ch;
+  line-height: 1.6;
+}
+
+.rail {
+  position: fixed;
+  left: 50%;
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 20px);
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 14px;
+  background: var(--panel);
+  border: 1px solid var(--gold-line);
+  border-radius: 999px;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  max-width: calc(100vw - 32px);
+  flex-wrap: nowrap;
+  white-space: nowrap;
+  justify-content: center;
+}
+@media (max-width: 480px) {
+  .rail { gap: 8px; padding: 8px 10px; }
+  .rail input[type="range"] { width: 76px; }
+  .rail button { padding: 6px 11px; font-size: 12px; }
+  .rail .long { display: none; }
+  .hint { bottom: calc(env(safe-area-inset-bottom, 0px) + 76px); font-size: 14px; }
+}
+.rail label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+.rail input[type="range"] { width: 120px; accent-color: var(--gold); }
+.rail button {
+  font: inherit;
+  font-size: 13px;
+  color: var(--fg);
+  background: transparent;
+  border: 1px solid var(--gold-line);
+  border-radius: 999px;
+  padding: 6px 14px;
+  cursor: pointer;
+  transition: border-color .2s, color .2s;
+}
+.rail button:hover { border-color: var(--gold); color: var(--gold); }
+.rail button:focus-visible, .rail input:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+
+.hint {
+  position: fixed;
+  left: 50%;
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 84px);
+  transform: translateX(-50%);
+  font-family: var(--display);
+  font-size: 15px;
+  color: var(--fg);
+  opacity: 0.75;
+  pointer-events: none;
+  transition: opacity .8s;
+  white-space: nowrap;
+}
+.hint.gone { opacity: 0; }
+</style>
+
+<canvas id="back"></canvas>
+<canvas id="mid"></canvas>
+<canvas id="front"></canvas>
+<canvas id="orn"></canvas>
+<canvas id="fx"></canvas>
+
+<div class="title">
+  <h1>Tree Brush</h1>
+  <p>검은 캔버스에 선을 그으면, 그 선을 따라 전나무 가지와 오너먼트, 반짝이는 전구가 자랍니다.</p>
+</div>
+
+<div class="hint" id="hint">마우스로 아무 곳에나 그려보세요</div>
+
+<div class="rail">
+  <label for="size">굵기 <input id="size" type="range" min="14" max="64" value="34"></label>
+  <button id="replay" type="button">예시<span class="long"> 다시 그리기</span></button>
+  <button id="clear" type="button">지우기</button>
+</div>
+
+<script>
+(() => {
+  const cBack = document.getElementById('back');
+  const cMid = document.getElementById('mid');
+  const cFront = document.getElementById('front');
+  const cOrn = document.getElementById('orn');
+  const fx = document.getElementById('fx');
+  const LAYERS = [cBack, cMid, cFront, cOrn];
+  const back = cBack.getContext('2d');
+  const mid = cMid.getContext('2d');
+  const front = cFront.getContext('2d');
+  const orn = cOrn.getContext('2d');
+  const fctx = fx.getContext('2d');
+  const sizeInput = document.getElementById('size');
+  const hint = document.getElementById('hint');
+  const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  let W = 0, H = 0, DPR = 1;
+  const rand = (a, b) => a + Math.random() * (b - a);
+  const pick = arr => arr[(Math.random() * arr.length) | 0];
+
+  // ---------- sizing ----------
+  function resize() {
+    const prevDPR = DPR;
+    const snaps = LAYERS.map(c => {
+      if (!c.width) return null;
+      const s = document.createElement('canvas');
+      s.width = c.width; s.height = c.height;
+      s.getContext('2d').drawImage(c, 0, 0);
+      return s;
+    });
+    DPR = Math.min(window.devicePixelRatio || 1, 2);
+    W = innerWidth; H = innerHeight;
+    for (const c of [...LAYERS, fx]) {
+      c.width = Math.round(W * DPR); c.height = Math.round(H * DPR);
+      c.getContext('2d').setTransform(DPR, 0, 0, DPR, 0, 0);
+    }
+    LAYERS.forEach((c, i) => {
+      const s = snaps[i];
+      if (s) c.getContext('2d').drawImage(s, 0, 0, s.width / prevDPR, s.height / prevDPR);
+    });
+  }
+  addEventListener('resize', resize);
+  resize();
+  if (W < 600) sizeInput.value = 26;
+  const R = () => +sizeInput.value;
+
+  // ---------- light sprites ----------
+  function glowSprite(rgb, size = 96) {
+    const c = document.createElement('canvas');
+    c.width = c.height = size;
+    const g = c.getContext('2d');
+    const gr = g.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+    gr.addColorStop(0, 'rgba(255,255,255,1)');
+    gr.addColorStop(0.07, `rgba(${rgb},0.95)`);
+    gr.addColorStop(0.22, `rgba(${rgb},0.38)`);
+    gr.addColorStop(0.5, `rgba(${rgb},0.08)`);
+    gr.addColorStop(1, `rgba(${rgb},0)`);
+    g.fillStyle = gr; g.fillRect(0, 0, size, size);
+    return c;
+  }
+  const GLOWS = [glowSprite('255,198,110'), glowSprite('255,212,140'), glowSprite('255,236,205')];
+  const GLOW_W = [0.55, 0.3, 0.15];
+
+  // ---------- realistic fir branch sprites ----------
+  // Each sprite is a branchlet drawn at a fixed reference scale: a curved woody stem,
+  // alternating side twigs, and hundreds of needles shaded from a dark base to a lighter tip,
+  // lit from above, with the occasional silvery underside needle. Three depth tones.
+  const SL = 120, SH = 120, SC = SH / 2;
+  const TONES = [
+    { base: [152, 42, 5],  tip: [142, 36, 12], w: 2.3, blur: 0.9, stem: [28, 30, 8] },   // back, in shadow
+    { base: [148, 46, 9],  tip: [122, 34, 24], w: 2.2, blur: 0,   stem: [28, 32, 13] },  // middle
+    { base: [144, 44, 13], tip: [98, 38, 38],  w: 2.0, blur: 0,   stem: [30, 34, 18] },  // front, lit tips
+  ];
+  const hsl = (c, dl = 0) => `hsl(${c[0]},${c[1]}%,${Math.max(0, Math.min(90, c[2] + dl))}%)`;
+  const mix = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+
+  function makeBranch(tone) {
+    const c = document.createElement('canvas');
+    c.width = SL; c.height = SH;
+    const g = c.getContext('2d');
+    g.lineCap = 'round';
+    if (tone.blur && 'filter' in g) g.filter = `blur(${tone.blur}px)`;
+    const bend = rand(-12, 12);
+    const stem = t => ({ x: 3 + t * (SL - 16), y: SC + bend * t * t });
+    const stemAngle = t => Math.atan2(2 * bend * t, SL - 16);
+
+    function needle(x, y, a, nl, s, short) {
+      const ca = Math.cos(a), sa = Math.sin(a);
+      const ex = x + ca * nl, ey = y + sa * nl;
+      const mx = x + ca * nl * 0.45, my = y + sa * nl * 0.45;
+      const lit = -sa * 5 + rand(-2.5, 2.5);
+      const col = mix(tone.base, tone.tip, Math.min(1, s * 0.55 + Math.random() * 0.55));
+      g.lineWidth = tone.w * (short ? 0.85 : rand(0.85, 1.1));
+      g.strokeStyle = hsl(tone.base, lit * 0.5);
+      g.beginPath(); g.moveTo(x, y); g.lineTo(mx, my); g.stroke();
+      g.strokeStyle = hsl(col, lit);
+      g.beginPath(); g.moveTo(mx, my); g.lineTo(ex, ey); g.stroke();
+      if (Math.random() < 0.05) {
+        g.lineWidth = tone.w * 0.6;
+        g.strokeStyle = `hsla(165,18%,${32 + tone.base[2] * 1.2}%,0.7)`;
+        g.beginPath(); g.moveTo(mx, my); g.lineTo(ex, ey); g.stroke();
+      }
+    }
+    function needleRun(pt, ang, len, n0, scale) {
+      const n = Math.max(4, Math.round(len / 1.8));
+      for (let i = 0; i <= n; i++) {
+        const s = i / n;
+        const p = pt(s);
+        const a = ang(s);
+        const nl = rand(13, 19) * scale * (1 - 0.45 * s);
+        const spread = 1.15 - 0.5 * s;
+        needle(p.x, p.y, a - rand(spread - 0.25, spread + 0.15), nl, s);
+        needle(p.x, p.y, a + rand(spread - 0.25, spread + 0.15), nl, s);
+        if (Math.random() < 0.6) needle(p.x, p.y, a + rand(-2.7, 2.7), nl * rand(0.3, 0.55), s, true);
+      }
+      const e = pt(1);
+      needle(e.x, e.y, ang(1), rand(8, 11) * scale, 1);
+    }
+
+    // woody stem
+    g.strokeStyle = hsl(tone.stem);
+    for (let i = 0; i < 12; i++) {
+      const a = stem(i / 12), b = stem((i + 1) / 12);
+      g.lineWidth = 3.2 * (1 - i / 14);
+      g.beginPath(); g.moveTo(a.x, a.y); g.lineTo(b.x, b.y); g.stroke();
+    }
+    // twigs
+    const twigs = [];
+    let side = Math.random() < 0.5 ? 1 : -1;
+    for (let t = 0.1; t < 0.8; t += rand(0.11, 0.17)) {
+      side = -side;
+      const p = stem(t);
+      const a = stemAngle(t) + side * rand(0.55, 0.95);
+      const len = (1 - t) * SL * rand(0.32, 0.46) + 10;
+      twigs.push({ x: p.x, y: p.y, a, len });
+      g.strokeStyle = hsl(tone.stem, -2);
+      g.lineWidth = 1.6;
+      g.beginPath(); g.moveTo(p.x, p.y); g.lineTo(p.x + Math.cos(a) * len, p.y + Math.sin(a) * len); g.stroke();
+    }
+    // needles: stem first (inner), then twigs on top
+    needleRun(stem, stemAngle, SL, 0, 1);
+    for (const tw of twigs) {
+      const ca = Math.cos(tw.a), sa = Math.sin(tw.a);
+      needleRun(s => ({ x: tw.x + ca * tw.len * s, y: tw.y + sa * tw.len * s }), () => tw.a, tw.len, 0, 0.85);
+    }
+    return c;
+  }
+  const SPRITES = TONES.map(t => Array.from({ length: 8 }, () => makeBranch(t)));
+
+  function stamp(ctx, tone, x, y, a, len) {
+    const spr = pick(SPRITES[tone]);
+    const s = len / SL;
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(a);
+    if (Math.cos(a) < 0) ctx.scale(1, -1);   // keep the lit side facing up
+    ctx.scale(s, s);
+    ctx.drawImage(spr, 0, -SC);
+    ctx.restore();
+  }
+
+  // ---------- ornament palette ----------
+  const ORN = {
+    red:       ['#ffb0a8', '#c8172c', '#3a020b'],
+    gold:      ['#fff6cf', '#d2a03a', '#3c2506'],
+    burgundy:  ['#f08a90', '#871023', '#22010a'],
+    champagne: ['#ffffff', '#d6c2a2', '#3e3022'],
+  };
+
+  // ---------- state ----------
+  let lights = [];
+  let pending = [];
+  let glinters = [];
+  let stars = [];
+  let particles = [];
+  let flares = [];
+
+  // ---------- shapes ----------
+  function starPath(ctx, x, y, Ro, Ri, n, rot) {
+    ctx.beginPath();
+    for (let i = 0; i < n * 2; i++) {
+      const rr = i % 2 ? Ri : Ro;
+      const a = rot + (i * Math.PI) / n;
+      ctx.lineTo(x + Math.cos(a) * rr, y + Math.sin(a) * rr);
+    }
+    ctx.closePath();
+  }
+  function sparkleShape(ctx, x, y, size, rot) {
+    starPath(ctx, x, y, size, size * 0.18, 4, rot);
+    ctx.fill();
+  }
+
+  function drawOrnament(ctx, o, s) {
+    if (s <= 0) return;
+    if (o.type === 'cone') drawCone(ctx, o, s);
+    else drawBall(ctx, o, s);
+  }
+
+  function drawBall(ctx, o, s) {
+    const x = o.x, y = o.y, Rr = o.r * s;
+    const [hi, midc, lo] = ORN[o.color];
+    const shiny = o.variant !== 'matte';
+
+    // hanger wire
+    ctx.strokeStyle = 'rgba(200,170,105,0.8)';
+    ctx.lineWidth = 0.8;
+    ctx.beginPath();
+    ctx.moveTo(x, y - Rr * 1.25);
+    ctx.quadraticCurveTo(x + o.sway * s, y - Rr * 1.25 - o.str * s * 0.5, x + o.sway * 0.4 * s, y - Rr * 1.25 - o.str * s);
+    ctx.stroke();
+
+    // body with soft drop shadow onto the needles
+    ctx.save();
+    ctx.shadowColor = 'rgba(0,0,0,0.7)';
+    ctx.shadowBlur = Rr * 0.9 * DPR;
+    ctx.shadowOffsetX = Rr * 0.12 * DPR;
+    ctx.shadowOffsetY = Rr * 0.4 * DPR;
+    const g = ctx.createRadialGradient(x - Rr * 0.35, y - Rr * 0.4, Rr * 0.03, x, y, Rr * 1.02);
+    if (shiny) {
+      g.addColorStop(0, hi); g.addColorStop(0.22, midc); g.addColorStop(0.75, lo); g.addColorStop(1, lo);
+    } else {
+      g.addColorStop(0, midc); g.addColorStop(0.5, midc); g.addColorStop(1, lo);
+    }
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(x, y, Rr, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+
+    ctx.save();
+    ctx.beginPath(); ctx.arc(x, y, Rr, 0, Math.PI * 2); ctx.clip();
+
+    if (o.variant === 'band') {
+      ctx.strokeStyle = o.color === 'gold' ? 'rgba(120,14,28,0.9)' : 'rgba(232,196,110,0.9)';
+      ctx.lineWidth = Rr * 0.26;
+      ctx.beginPath(); ctx.ellipse(x, y + Rr * 0.05, Rr * 1.2, Rr * 0.32, -0.2, 0, Math.PI * 2); ctx.stroke();
+    }
+    if (o.variant === 'glitter') {
+      for (const d of o.dots) {
+        ctx.globalAlpha = d.a;
+        ctx.fillStyle = d.c;
+        ctx.fillRect(x + d.x * Rr, y + d.y * Rr, d.s * s, d.s * s);
+      }
+      ctx.globalAlpha = 1;
+    }
+
+    // fresnel darkening toward the rim
+    const e = ctx.createRadialGradient(x - Rr * 0.1, y - Rr * 0.1, Rr * 0.45, x, y, Rr);
+    e.addColorStop(0, 'rgba(0,0,0,0)');
+    e.addColorStop(1, shiny ? 'rgba(0,0,0,0.55)' : 'rgba(0,0,0,0.35)');
+    ctx.fillStyle = e; ctx.fillRect(x - Rr, y - Rr, Rr * 2, Rr * 2);
+
+    // warm bounce from the fairy lights, lower right
+    const rim = ctx.createRadialGradient(x + Rr * 0.6, y + Rr * 0.65, 0, x + Rr * 0.6, y + Rr * 0.65, Rr * 0.85);
+    rim.addColorStop(0, shiny ? 'rgba(255,195,120,0.5)' : 'rgba(255,190,120,0.22)');
+    rim.addColorStop(1, 'rgba(255,190,120,0)');
+    ctx.fillStyle = rim; ctx.fillRect(x - Rr, y - Rr, Rr * 2, Rr * 2);
+
+    if (shiny) {
+      // soft window reflection + sharp specular + tiny reflected bulbs
+      const w = ctx.createRadialGradient(x - Rr * 0.38, y - Rr * 0.42, 0, x - Rr * 0.38, y - Rr * 0.42, Rr * 0.5);
+      w.addColorStop(0, 'rgba(255,255,255,0.75)');
+      w.addColorStop(0.35, 'rgba(255,255,255,0.25)');
+      w.addColorStop(1, 'rgba(255,255,255,0)');
+      ctx.fillStyle = w; ctx.fillRect(x - Rr, y - Rr, Rr * 2, Rr * 2);
+      ctx.fillStyle = 'rgba(255,255,255,0.95)';
+      ctx.beginPath(); ctx.ellipse(x - Rr * 0.42, y - Rr * 0.48, Rr * 0.12, Rr * 0.07, -0.6, 0, Math.PI * 2); ctx.fill();
+      for (const d of o.refl) {
+        ctx.fillStyle = `rgba(255,${210 + d.g},150,${d.a})`;
+        ctx.beginPath(); ctx.arc(x + d.x * Rr, y + d.y * Rr, Math.max(0.6, Rr * 0.045), 0, Math.PI * 2); ctx.fill();
+      }
+    } else {
+      const sh = ctx.createRadialGradient(x - Rr * 0.3, y - Rr * 0.35, 0, x - Rr * 0.3, y - Rr * 0.35, Rr * 0.95);
+      sh.addColorStop(0, 'rgba(255,255,255,0.2)');
+      sh.addColorStop(1, 'rgba(255,255,255,0)');
+      ctx.fillStyle = sh; ctx.fillRect(x - Rr, y - Rr, Rr * 2, Rr * 2);
+    }
+    ctx.restore();
+
+    // ribbed metal cap with loop
+    const cw = Rr * 0.46, ch = Rr * 0.3, cx0 = x - cw / 2, cy0 = y - Rr * 1.08;
+    const cg = ctx.createLinearGradient(cx0, 0, cx0 + cw, 0);
+    cg.addColorStop(0, '#5a4012'); cg.addColorStop(0.35, '#f4dc98'); cg.addColorStop(0.6, '#b8902f'); cg.addColorStop(1, '#4a330c');
+    ctx.fillStyle = cg;
+    ctx.fillRect(cx0, cy0, cw, ch);
+    ctx.strokeStyle = 'rgba(60,40,10,0.55)';
+    ctx.lineWidth = Math.max(0.5, Rr * 0.03);
+    for (let k = 1; k < 5; k++) {
+      const xx = cx0 + (cw * k) / 5;
+      ctx.beginPath(); ctx.moveTo(xx, cy0); ctx.lineTo(xx, cy0 + ch); ctx.stroke();
+    }
+    ctx.strokeStyle = '#c9a24a';
+    ctx.lineWidth = Math.max(0.7, Rr * 0.05);
+    ctx.beginPath(); ctx.arc(x, cy0 - Rr * 0.08, Rr * 0.1, 0, Math.PI * 2); ctx.stroke();
+  }
+
+  function drawCone(ctx, o, s) {
+    const rw = o.r * 0.7 * s, rh = o.r * 1.25 * s;
+    ctx.save();
+    ctx.translate(o.x, o.y);
+    ctx.rotate(o.tilt);
+    ctx.save();
+    ctx.shadowColor = 'rgba(0,0,0,0.7)';
+    ctx.shadowBlur = rw * 1.2 * DPR;
+    ctx.shadowOffsetY = rw * 0.5 * DPR;
+    ctx.fillStyle = '#21120a';
+    ctx.beginPath(); ctx.ellipse(0, 0, rw, rh, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+    const rows = 8;
+    for (let i = 0; i < rows; i++) {
+      const t = i / (rows - 1);
+      const yy = rh * (-0.82 + 1.64 * t);
+      const span = rw * Math.sqrt(Math.max(0.08, 1 - (yy / rh) ** 2));
+      const n = i % 2 ? 3 : 4;
+      const sw = (2 * span) / n;
+      for (let j = 0; j < n; j++) {
+        const cx = -span + sw * (j + 0.5);
+        const sg = ctx.createLinearGradient(0, yy - rh * 0.16, 0, yy + rh * 0.16);
+        sg.addColorStop(0, '#2c180a');
+        sg.addColorStop(0.65, '#7a4d24');
+        sg.addColorStop(1, '#b98a52');
+        ctx.fillStyle = sg;
+        ctx.beginPath();
+        ctx.ellipse(cx, yy, sw * 0.58, rh * 0.16, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(225,185,120,0.35)';
+        ctx.lineWidth = Math.max(0.5, s * 0.7);
+        ctx.beginPath();
+        ctx.ellipse(cx, yy, sw * 0.58, rh * 0.16, 0, 0.15 * Math.PI, 0.85 * Math.PI);
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
+  }
+
+  // Metallic gold ramp, dark to hot highlight
+  const GOLD = [[52, 30, 5], [128, 82, 18], [196, 146, 48], [240, 200, 110], [255, 236, 170], [255, 252, 235]];
+  function gold(t, a = 1) {
+    t = Math.max(0, Math.min(0.999, t)) * (GOLD.length - 1);
+    const i = t | 0, f = t - i, c0 = GOLD[i], c1 = GOLD[i + 1];
+    return `rgba(${(c0[0] + (c1[0] - c0[0]) * f) | 0},${(c0[1] + (c1[1] - c0[1]) * f) | 0},${(c0[2] + (c1[2] - c0[2]) * f) | 0},${a})`;
+  }
+
+  // A beveled 3D star: each arm is two facets lit from the upper left,
+  // a raised center, glitter that twinkles, a slight sway like a real topper.
+  function drawStarBody(ctx, st, s, ts) {
+    const Ro = st.r * s;
+    if (Ro <= 0) return;
+    const Ri = Ro * 0.42;
+    const rot = -Math.PI / 2 + Math.sin(ts * 0.8 + st.seed) * 0.06;
+    const x = st.x, y = st.y;
+    const pts = [];
+    for (let i = 0; i < 10; i++) {
+      const rr = i % 2 ? Ri : Ro;
+      const a = rot + (i * Math.PI) / 5;
+      pts.push({ x: x + Math.cos(a) * rr, y: y + Math.sin(a) * rr, a });
+    }
+    const outline = () => { ctx.beginPath(); for (const p of pts) ctx.lineTo(p.x, p.y); ctx.closePath(); };
+
+    // cast shadow onto the needles
+    ctx.save();
+    ctx.shadowColor = 'rgba(0,0,0,0.7)';
+    ctx.shadowBlur = Ro * 0.6 * DPR;
+    ctx.shadowOffsetX = Ro * 0.08 * DPR;
+    ctx.shadowOffsetY = Ro * 0.25 * DPR;
+    ctx.fillStyle = gold(0.1);
+    outline(); ctx.fill();
+    ctx.restore();
+
+    // facets
+    const LA = -Math.PI * 0.72;
+    const ax = x - Ro * 0.03, ay = y - Ro * 0.04;
+    for (let i = 0; i < 5; i++) {
+      const tip = pts[2 * i];
+      for (const side of [-1, 1]) {
+        const v = side < 0 ? pts[(2 * i + 9) % 10] : pts[2 * i + 1];
+        const b = 0.5 + 0.5 * Math.cos(tip.a + side * 0.55 - LA);
+        const g = ctx.createLinearGradient(ax, ay, tip.x, tip.y);
+        g.addColorStop(0, gold(0.18 + b * 0.82));
+        g.addColorStop(0.55, gold(0.1 + b * 0.7));
+        g.addColorStop(1, gold(0.05 + b * 0.55));
+        ctx.fillStyle = g;
+        ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(tip.x, tip.y); ctx.lineTo(v.x, v.y); ctx.closePath();
+        ctx.fill();
+      }
+    }
+
+    ctx.save();
+    outline(); ctx.clip();
+    // twinkling glitter
+    for (const d of st.dots) {
+      const tw = Math.max(0, Math.sin(ts * d.sp + d.ph));
+      ctx.fillStyle = d.w ? `rgba(255,252,235,${d.a * tw})` : gold(0.85, d.a * (0.4 + 0.6 * tw));
+      ctx.fillRect(x + d.x * Ro, y + d.y * Ro, d.s * s, d.s * s);
+    }
+    // specular hot spot near the raised center
+    const sp = ctx.createRadialGradient(ax - Ro * 0.18, ay - Ro * 0.2, 0, ax - Ro * 0.18, ay - Ro * 0.2, Ro * 0.55);
+    sp.addColorStop(0, 'rgba(255,255,245,0.75)');
+    sp.addColorStop(0.3, 'rgba(255,245,210,0.2)');
+    sp.addColorStop(1, 'rgba(255,240,200,0)');
+    ctx.fillStyle = sp; ctx.fillRect(x - Ro, y - Ro, Ro * 2, Ro * 2);
+    ctx.restore();
+
+    // ridges catch the light, valleys fall into shadow
+    ctx.lineCap = 'round';
+    for (let i = 0; i < 10; i++) {
+      const p = pts[i];
+      if (i % 2 === 0) {
+        const b = 0.5 + 0.5 * Math.cos(p.a - LA);
+        ctx.strokeStyle = `rgba(255,248,220,${0.35 + 0.5 * b})`;
+        ctx.lineWidth = Math.max(0.6, Ro * 0.035);
+      } else {
+        ctx.strokeStyle = 'rgba(50,28,4,0.55)';
+        ctx.lineWidth = Math.max(0.5, Ro * 0.025);
+      }
+      ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(p.x, p.y); ctx.stroke();
+    }
+    // thin bright bevel edge
+    ctx.strokeStyle = 'rgba(255,226,150,0.55)';
+    ctx.lineWidth = Math.max(0.6, Ro * 0.025);
+    ctx.lineJoin = 'round';
+    outline(); ctx.stroke();
+    // center jewel
+    ctx.fillStyle = 'rgba(255,253,240,0.95)';
+    ctx.beginPath(); ctx.arc(ax, ay, Math.max(0.8, Ro * 0.05), 0, Math.PI * 2); ctx.fill();
+  }
+
+  // ---------- spawning ----------
+  function makeOrnament(x, y, r) {
+    if (Math.random() < 0.08) {
+      return { type: 'cone', x, y, r: r * rand(0.32, 0.42), tilt: rand(-0.4, 0.4), born: performance.now() };
+    }
+    const roll = Math.random();
+    const color = roll < 0.45 ? 'red' : roll < 0.8 ? 'gold' : roll < 0.9 ? 'burgundy' : 'champagne';
+    const v = Math.random();
+    const variant = v < 0.42 ? 'shiny' : v < 0.68 ? 'matte' : v < 0.9 ? 'glitter' : 'band';
+    const o = {
+      type: 'ball', x, y, r: r * rand(0.26, 0.44), color, variant,
+      str: r * rand(0.25, 0.55), sway: rand(-3, 3), born: performance.now(),
+      refl: Array.from({ length: 3 + ((Math.random() * 3) | 0) }, () => {
+        const a = rand(-0.3, 1.6), d = rand(0.55, 0.85);
+        return { x: Math.cos(a) * d, y: Math.sin(a) * d, a: rand(0.5, 0.95), g: (Math.random() * 40) | 0 };
+      }),
+    };
+    if (variant === 'glitter') {
+      o.dots = [];
+      for (let i = 0; i < 90; i++) {
+        const a = Math.random() * Math.PI * 2, d = Math.sqrt(Math.random());
+        o.dots.push({ x: Math.cos(a) * d, y: Math.sin(a) * d, s: rand(0.5, 1.3),
+          a: rand(0.3, 0.95), c: Math.random() < 0.45 ? '#fff4d0' : ORN[color][Math.random() < 0.5 ? 0 : 1] });
+      }
+    }
+    return o;
+  }
+
+  function addLight(x, y, r) {
+    let i = 0, u = Math.random();
+    while (i < GLOW_W.length - 1 && u > GLOW_W[i]) { u -= GLOW_W[i]; i++; }
+    // wire from the previous bulb, tucked into the middle layer
+    if (stroke && stroke.lastLight) {
+      const p = stroke.lastLight;
+      if (Math.hypot(x - p.x, y - p.y) < r * 2.2) {
+        mid.strokeStyle = 'rgba(14,26,14,0.95)';
+        mid.lineWidth = 1;
+        mid.beginPath();
+        mid.moveTo(p.x, p.y);
+        mid.quadraticCurveTo((p.x + x) / 2, (p.y + y) / 2 + rand(3, 7), x, y);
+        mid.stroke();
+      }
+    }
+    if (stroke) stroke.lastLight = { x, y };
+    // warm light spilling onto nearby needles
+    for (const ctx of [mid, front]) {
+      ctx.globalCompositeOperation = 'source-atop';
+      const gl = ctx.createRadialGradient(x, y, 0, x, y, r * 0.6);
+      gl.addColorStop(0, 'rgba(255,190,100,0.42)');
+      gl.addColorStop(0.4, 'rgba(255,170,80,0.14)');
+      gl.addColorStop(1, 'rgba(255,170,80,0)');
+      ctx.fillStyle = gl;
+      ctx.fillRect(x - r * 0.6, y - r * 0.6, r * 1.2, r * 1.2);
+      ctx.globalCompositeOperation = 'source-over';
+    }
+    // tiny bulb socket
+    front.fillStyle = '#0c160c';
+    front.fillRect(x - 1, y + 1.2, 2, 2.4);
+    lights.push({ x, y, ph: rand(0, Math.PI * 2), sp: rand(1.2, 3.2) * (reduced ? 0.3 : 1), g: i, s: rand(18, 32), born: performance.now() });
+    if (lights.length > 2400) {
+      const old = lights.shift();
+      orn.globalCompositeOperation = 'lighter';
+      orn.globalAlpha = 0.5;
+      orn.drawImage(GLOWS[old.g], old.x - old.s / 2, old.y - old.s / 2, old.s, old.s);
+      orn.globalAlpha = 1;
+      orn.globalCompositeOperation = 'source-over';
+    }
+  }
+
+  function burst(x, y, n, spread = 1) {
+    if (reduced) n = Math.ceil(n / 3);
+    for (let i = 0; i < n; i++) {
+      const a = Math.random() * Math.PI * 2, sp = rand(0.3, 2.4) * spread;
+      particles.push({
+        x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 0.3,
+        life: 0, max: rand(450, 1100), size: rand(1.5, 4.5), rot: rand(0, Math.PI),
+        c: Math.random() < 0.6 ? '255,226,150' : '255,250,235',
+      });
+    }
+  }
+
+  // ---------- stroke ----------
+  let stroke = null;
+  const STEP = 5;
+
+  function beginStroke(x, y) {
+    stroke = { last: { x, y }, carry: 0, len: 0, top: { x, y },
+      nextOrn: R() * rand(0.6, 1.2), nextLight: 0, ornaments: [], lastLight: null };
+    decorate(x, y, 1, 0);
+    burst(x, y, 10);
+  }
+
+  function extendStroke(x, y) {
+    if (!stroke) return;
+    const lx = stroke.last.x, ly = stroke.last.y;
+    const dx = x - lx, dy = y - ly, d = Math.hypot(dx, dy);
+    if (d < 0.5) return;
+    const ux = dx / d, uy = dy / d;
+    let t = STEP - stroke.carry;
+    while (t <= d) {
+      decorate(lx + ux * t, ly + uy * t, ux, uy);
+      t += STEP;
+    }
+    stroke.carry = d - (t - STEP);
+    stroke.len += d;
+    stroke.last = { x, y };
+    if (y < stroke.top.y) stroke.top = { x, y };
+    burst(x, y, Math.min(6, 1 + d / 8), 0.8);
+  }
+
+  function endStroke() {
+    if (!stroke) return;
+    for (const o of stroke.ornaments) o.strokeDone = true;
+    if (stroke.len > 160) {
+      const r = R();
+      const st = { x: stroke.top.x, y: stroke.top.y - r * 0.75, r: r * 0.95, born: performance.now(), seed: rand(0, 6),
+        dots: Array.from({ length: 70 }, () => {
+          const a = Math.random() * Math.PI * 2, d = Math.sqrt(Math.random()) * 0.95;
+          return { x: Math.cos(a) * d, y: Math.sin(a) * d, s: rand(0.6, 1.5), a: rand(0.4, 1),
+            sp: rand(2, 6), ph: rand(0, 6.3), w: Math.random() < 0.4 };
+        }) };
+      stars.push(st);
+      burst(st.x, st.y, 40, 2.2);
+    }
+    stroke = null;
+  }
+
+  function sideAngle(da) {
+    const side = Math.random() < 0.5 ? -1 : 1;
+    return da + side * (Math.PI / 2 + rand(-0.6, 0.9));
+  }
+
+  function decorate(x, y, ux, uy) {
+    const r = R();
+    const da = Math.atan2(uy, ux);
+    const j = () => rand(-2.5, 2.5);
+
+    // shadowed core to fill gaps between branches
+    const ug = back.createRadialGradient(x, y, 0, x, y, r * 0.65);
+    ug.addColorStop(0, 'rgba(2,12,6,0.6)');
+    ug.addColorStop(1, 'rgba(2,12,6,0)');
+    back.fillStyle = ug;
+    back.fillRect(x - r * 0.65, y - r * 0.65, r * 1.3, r * 1.3);
+
+    stamp(back, 0, x + j(), y + j(), sideAngle(da), r * rand(0.95, 1.3));
+    stamp(back, 0, x + j(), y + j(), sideAngle(da), r * rand(0.8, 1.2));
+    stamp(mid, 1, x + j(), y + j(), sideAngle(da), r * rand(0.7, 1.08));
+    if (Math.random() < 0.8) stamp(mid, 1, x + j(), y + j(), sideAngle(da), r * rand(0.6, 1.0));
+    if (Math.random() < 0.65) stamp(front, 2, x + j(), y + j(), sideAngle(da), r * rand(0.45, 0.82));
+    if (Math.random() < 0.2) stamp(front, 2, x + j(), y + j(), da + (Math.random() < 0.5 ? 0 : Math.PI) + rand(-0.5, 0.5), r * rand(0.4, 0.7));
+
+    if (!stroke) return;
+    stroke.nextOrn -= STEP;
+    if (stroke.nextOrn <= 0) {
+      const off = rand(-0.65, 0.65) * r;
+      const o = makeOrnament(x - uy * off, y + ux * off, r);
+      pending.push(o);
+      stroke.ornaments.push(o);
+      stroke.nextOrn = r * rand(1.1, 2.1);
+      burst(o.x, o.y, 6, 1.2);
+    }
+    stroke.nextLight -= STEP;
+    if (stroke.nextLight <= 0) {
+      const a = Math.random() * Math.PI * 2, dd = Math.sqrt(Math.random()) * r * 0.85;
+      addLight(x + Math.cos(a) * dd, y + Math.sin(a) * dd, r);
+      stroke.nextLight = r * rand(0.22, 0.42);
+    }
+  }
+
+  // ---------- input ----------
+  let activeId = null;
+  fx.addEventListener('pointerdown', e => {
+    if (activeId !== null) return;
+    stopDemo();
+    activeId = e.pointerId;
+    fx.setPointerCapture(e.pointerId);
+    hint.classList.add('gone');
+    beginStroke(e.clientX, e.clientY);
+  });
+  fx.addEventListener('pointermove', e => {
+    if (e.pointerId !== activeId) return;
+    const evs = e.getCoalescedEvents ? e.getCoalescedEvents() : [];
+    for (const ev of (evs.length ? evs : [e])) extendStroke(ev.clientX, ev.clientY);
+  });
+  const up = e => {
+    if (e.pointerId !== activeId) return;
+    activeId = null;
+    endStroke();
+  };
+  fx.addEventListener('pointerup', up);
+  fx.addEventListener('pointercancel', up);
+
+  function clearAll() {
+    stopDemo();
+    for (const c of LAYERS) c.getContext('2d').clearRect(0, 0, W, H);
+    lights = []; pending = []; glinters = []; stars = []; particles = []; flares = [];
+    stroke = null; activeId = null;
+  }
+  document.getElementById('clear').addEventListener('click', clearAll);
+  document.getElementById('replay').addEventListener('click', () => { clearAll(); startDemo(); });
+
+  // ---------- demo: draws a zigzag tree on load ----------
+  let demo = null;
+  function demoPoints() {
+    const h = Math.min(H * 0.6, W * 1.1);
+    const top = H * 0.5 - h * 0.5 + 30;
+    const cx = W / 2;
+    const w = h * 0.38;
+    const pts = [[cx, top]];
+    const levels = 6;
+    for (let i = 1; i <= levels; i++) {
+      const y = top + (h * i) / levels;
+      const hw = (w * i) / levels;
+      if (i % 2) pts.push([cx - hw, y - h * 0.02], [cx + hw * 0.55, y + h * 0.015]);
+      else pts.push([cx + hw, y - h * 0.02], [cx - hw * 0.55, y + h * 0.015]);
+    }
+    return pts;
+  }
+  function startDemo() {
+    const pts = demoPoints();
+    demo = { pts, seg: 0, t: 0, prev: performance.now() };
+    beginStroke(pts[0][0], pts[0][1]);
+  }
+  function stopDemo() {
+    if (!demo) return;
+    demo = null;
+    endStroke();
+  }
+  function stepDemo(now) {
+    if (!demo) return;
+    let budget = Math.min(60, now - demo.prev) * 0.9;
+    demo.prev = now;
+    while (budget > 0 && demo) {
+      const a = demo.pts[demo.seg], b = demo.pts[demo.seg + 1];
+      if (!b) { stopDemo(); return; }
+      const L = Math.hypot(b[0] - a[0], b[1] - a[1]);
+      const take = Math.min(budget, L - demo.t);
+      demo.t += take; budget -= take;
+      const k = demo.t / L;
+      extendStroke(a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k);
+      if (demo.t >= L - 0.01) { demo.seg++; demo.t = 0; }
+    }
+  }
+
+  // ---------- render loop ----------
+  const easeOutBack = t => { const c = 1.9; return 1 + (c + 1) * (t - 1) ** 3 + c * (t - 1) ** 2; };
+
+  function frame(now) {
+    stepDemo(now);
+    fctx.clearRect(0, 0, W, H);
+    fctx.globalCompositeOperation = 'source-over';
+
+    for (let i = pending.length - 1; i >= 0; i--) {
+      const o = pending[i];
+      const p = Math.min(1, (now - o.born) / 380);
+      if (p >= 1 && o.strokeDone) {
+        drawOrnament(orn, o, 1);
+        if (o.type === 'ball' && o.variant !== 'matte') glinters.push(o);
+        pending.splice(i, 1);
+        continue;
+      }
+      drawOrnament(fctx, o, easeOutBack(p));
+    }
+    if (glinters.length > 1500) glinters.splice(0, glinters.length - 1500);
+
+    for (const st of stars) {
+      drawStarBody(fctx, st, easeOutBack(Math.min(1, (now - st.born) / 600)), now / 1000);
+    }
+
+    fctx.globalCompositeOperation = 'lighter';
+    const ts = now / 1000;
+
+    for (const L of lights) {
+      const grow = Math.min(1, (now - L.born) / 250);
+      const tw = 0.5 + 0.5 * Math.sin(ts * L.sp + L.ph);
+      const a = (0.3 + 0.7 * tw * tw) * grow;
+      const s = L.s * (0.8 + 0.35 * tw) * grow;
+      fctx.globalAlpha = a;
+      fctx.drawImage(GLOWS[L.g], L.x - s / 2, L.y - s / 2, s, s);
+    }
+
+    for (const st of stars) {
+      const p = Math.min(1, (now - st.born) / 600);
+      const pulse = 0.75 + 0.25 * Math.sin(ts * 2.2 + st.x);
+      const s = st.r * 5 * pulse * p;
+      fctx.globalAlpha = 0.35;
+      fctx.drawImage(GLOWS[1], st.x - s / 2, st.y - s / 2, s, s);
+      // faint halo ring
+      fctx.globalAlpha = 0.12 * pulse * p;
+      fctx.strokeStyle = 'rgb(255,220,150)';
+      fctx.lineWidth = st.r * 0.12;
+      fctx.beginPath(); fctx.arc(st.x, st.y, st.r * 1.7, 0, Math.PI * 2); fctx.stroke();
+      // fine light rays, slowly turning, long and short alternating
+      fctx.save();
+      fctx.translate(st.x, st.y);
+      fctx.rotate(ts * 0.12 + st.seed);
+      for (let k = 0; k < 12; k++) {
+        const a = (k * Math.PI) / 6;
+        const len = st.r * (k % 3 === 0 ? 3.4 : k % 2 ? 1.5 : 2.2) * p * (0.8 + 0.2 * Math.sin(ts * 3 + k * 1.7)) * pulse;
+        const w = st.r * (k % 3 === 0 ? 0.07 : 0.045);
+        const ca = Math.cos(a), sa = Math.sin(a);
+        const rg = fctx.createLinearGradient(0, 0, ca * len, sa * len);
+        rg.addColorStop(0, 'rgba(255,245,215,0.7)');
+        rg.addColorStop(1, 'rgba(255,225,160,0)');
+        fctx.globalAlpha = p;
+        fctx.fillStyle = rg;
+        fctx.beginPath();
+        fctx.moveTo(-sa * w, ca * w);
+        fctx.lineTo(ca * len, sa * len);
+        fctx.lineTo(sa * w, -ca * w);
+        fctx.closePath();
+        fctx.fill();
+      }
+      fctx.restore();
+    }
+
+    const glintChance = reduced ? 0.03 : 0.22;
+    if (Math.random() < glintChance && (lights.length || glinters.length)) {
+      const useOrn = glinters.length && Math.random() < 0.5;
+      const src = useOrn ? pick(glinters) : pick(lights);
+      if (src) {
+        const f = useOrn ? { x: src.x - src.r * 0.42, y: src.y - src.r * 0.48, s: src.r * 1.2 }
+                         : { x: src.x, y: src.y, s: rand(8, 16) };
+        flares.push({ ...f, born: now, max: rand(500, 900), rot: rand(0, Math.PI / 4) });
+      }
+    }
+    for (let i = flares.length - 1; i >= 0; i--) {
+      const f = flares[i];
+      const p = (now - f.born) / f.max;
+      if (p >= 1) { flares.splice(i, 1); continue; }
+      const k = Math.sin(p * Math.PI);
+      fctx.globalAlpha = k;
+      fctx.fillStyle = 'rgb(255,248,225)';
+      sparkleShape(fctx, f.x, f.y, f.s * k, f.rot);
+    }
+
+    for (let i = particles.length - 1; i >= 0; i--) {
+      const q = particles[i];
+      q.life += 16;
+      if (q.life >= q.max) { particles.splice(i, 1); continue; }
+      q.x += q.vx; q.y += q.vy; q.vx *= 0.97; q.vy = q.vy * 0.97 + 0.015;
+      const p = q.life / q.max;
+      const a = p < 0.15 ? p / 0.15 : 1 - (p - 0.15) / 0.85;
+      fctx.globalAlpha = a;
+      fctx.fillStyle = `rgb(${q.c})`;
+      sparkleShape(fctx, q.x, q.y, q.size * (1 + Math.sin(p * Math.PI)), q.rot + p * 2);
+    }
+    if (particles.length > 900) particles.splice(0, particles.length - 900);
+
+    fctx.globalAlpha = 1;
+    fctx.globalCompositeOperation = 'source-over';
+    requestAnimationFrame(frame);
+  }
+
+  startDemo();
+  requestAnimationFrame(frame);
+})();
+</script>
