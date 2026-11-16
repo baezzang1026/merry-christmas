@@ -75,7 +75,7 @@ canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; p
 }
 @media (max-width: 480px) {
   .rail { gap: 8px; padding: 8px 10px; }
-  .rail input[type="range"] { width: 76px; }
+  .rail input[type="range"] { width: 60px; }
   .rail button { padding: 6px 11px; font-size: 12px; }
   .rail .long { display: none; }
   .hint { bottom: calc(env(safe-area-inset-bottom, 0px) + 76px); font-size: 14px; }
@@ -100,7 +100,8 @@ canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; p
   cursor: pointer;
   transition: border-color .2s, color .2s;
 }
-.rail button:hover { border-color: var(--gold); color: var(--gold); }
+.rail button:hover:not(:disabled) { border-color: var(--gold); color: var(--gold); }
+.rail button:disabled { opacity: 0.35; cursor: default; }
 .rail button:focus-visible, .rail input:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
 
 .hint {
@@ -135,6 +136,7 @@ canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; p
 <div class="rail">
   <label for="size">굵기 <input id="size" type="range" min="14" max="64" value="34"></label>
   <button id="replay" type="button">예시<span class="long"> 다시 그리기</span></button>
+  <button id="undo" type="button" disabled aria-label="되돌리기" title="되돌리기 (Ctrl+Z)">↶<span class="long"> 되돌리기</span></button>
   <button id="clear" type="button">지우기</button>
 </div>
 
@@ -163,13 +165,14 @@ canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; p
   function resize() {
     const prevDPR = DPR;
     const snaps = LAYERS.map(c => {
-      if (!c.width) return null;
+      if (!c.width || !c.height) return null;
       const s = document.createElement('canvas');
       s.width = c.width; s.height = c.height;
       s.getContext('2d').drawImage(c, 0, 0);
       return s;
     });
     DPR = Math.min(window.devicePixelRatio || 1, 2);
+    if (DPR !== prevDPR && typeof undoStack !== 'undefined') { undoStack.length = 0; }
     W = innerWidth; H = innerHeight;
     for (const c of [...LAYERS, fx]) {
       c.width = Math.round(W * DPR); c.height = Math.round(H * DPR);
@@ -309,6 +312,10 @@ canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; p
   };
 
   // ---------- state ----------
+  var undoStack = [];   // one entry per stroke: the pixels it covered, as they were before
+  const UNDO_MAX = 30;
+  let sidSeq = 0;
+  const snapPool = [];
   let lights = [];
   let pending = [];
   let glinters = [];
@@ -622,7 +629,7 @@ canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; p
     // tiny bulb socket
     front.fillStyle = '#0c160c';
     front.fillRect(x - 1, y + 1.2, 2, 2.4);
-    lights.push({ x, y, ph: rand(0, Math.PI * 2), sp: rand(1.2, 3.2) * (reduced ? 0.3 : 1), g: i, s: rand(18, 32), born: performance.now() });
+    lights.push({ sid: stroke ? stroke.id : 0, x, y, ph: rand(0, Math.PI * 2), sp: rand(1.2, 3.2) * (reduced ? 0.3 : 1), g: i, s: rand(18, 32), born: performance.now() });
     if (lights.length > 2400) {
       const old = lights.shift();
       orn.globalCompositeOperation = 'lighter';
@@ -649,8 +656,28 @@ canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; p
   let stroke = null;
   const STEP = 5;
 
+  // Bake ornaments still popping in, so a snapshot holds everything drawn so far.
+  function flushPending() {
+    for (const o of pending) {
+      drawOrnament(orn, o, 1);
+      if (o.type === 'ball' && o.variant !== 'matte') glinters.push(o);
+    }
+    pending = [];
+  }
+
   function beginStroke(x, y) {
-    stroke = { last: { x, y }, carry: 0, len: 0, top: { x, y },
+    flushPending();
+    const snap = LAYERS.map((c, i) => {
+      let s = snapPool[i];
+      if (!s) s = snapPool[i] = document.createElement('canvas');
+      if (s.width !== c.width || s.height !== c.height) { s.width = c.width; s.height = c.height; }
+      const g = s.getContext('2d');
+      g.clearRect(0, 0, s.width, s.height);
+      if (c.width && c.height) g.drawImage(c, 0, 0);
+      return s;
+    });
+    stroke = { id: ++sidSeq, snap, minX: x, maxX: x, minY: y, maxY: y, rMax: R(),
+      last: { x, y }, carry: 0, len: 0, top: { x, y },
       nextOrn: R() * rand(0.6, 1.2), nextLight: 0, ornaments: [], lastLight: null };
     decorate(x, y, 1, 0);
     burst(x, y, 10);
@@ -677,9 +704,27 @@ canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; p
   function endStroke() {
     if (!stroke) return;
     for (const o of stroke.ornaments) o.strokeDone = true;
+    // keep only the region this stroke touched, as it looked before
+    const m = stroke.rMax * 1.7 + 6;
+    const x0 = Math.max(0, Math.floor((stroke.minX - m) * DPR));
+    const y0 = Math.max(0, Math.floor((stroke.minY - m) * DPR));
+    const x1 = Math.min(cBack.width, Math.ceil((stroke.maxX + m) * DPR));
+    const y1 = Math.min(cBack.height, Math.ceil((stroke.maxY + m) * DPR));
+    if (x1 > x0 && y1 > y0 && stroke.snap[0].width) {
+      const crops = stroke.snap.map(s => {
+        const c = document.createElement('canvas');
+        c.width = x1 - x0; c.height = y1 - y0;
+        c.getContext('2d').drawImage(s, x0, y0, c.width, c.height, 0, 0, c.width, c.height);
+        return c;
+      });
+      undoStack.push({ id: stroke.id, x: x0, y: y0, crops, cx: (stroke.minX + stroke.maxX) / 2, cy: (stroke.minY + stroke.maxY) / 2 });
+      if (undoStack.length > UNDO_MAX) undoStack.shift();
+      pushHist();
+    }
+    updateUndo();
     if (stroke.len > 160) {
       const r = R();
-      const st = { x: stroke.top.x, y: stroke.top.y - r * 0.75, r: r * 0.95, born: performance.now(), seed: rand(0, 6),
+      const st = { sid: stroke.id, x: stroke.top.x, y: stroke.top.y - r * 0.75, r: r * 0.95, born: performance.now(), seed: rand(0, 6),
         dots: Array.from({ length: 70 }, () => {
           const a = Math.random() * Math.PI * 2, d = Math.sqrt(Math.random()) * 0.95;
           return { x: Math.cos(a) * d, y: Math.sin(a) * d, s: rand(0.6, 1.5), a: rand(0.4, 1),
@@ -716,10 +761,14 @@ canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; p
     if (Math.random() < 0.2) stamp(front, 2, x + j(), y + j(), da + (Math.random() < 0.5 ? 0 : Math.PI) + rand(-0.5, 0.5), r * rand(0.4, 0.7));
 
     if (!stroke) return;
+    if (x < stroke.minX) stroke.minX = x; if (x > stroke.maxX) stroke.maxX = x;
+    if (y < stroke.minY) stroke.minY = y; if (y > stroke.maxY) stroke.maxY = y;
+    if (r > stroke.rMax) stroke.rMax = r;
     stroke.nextOrn -= STEP;
     if (stroke.nextOrn <= 0) {
       const off = rand(-0.65, 0.65) * r;
       const o = makeOrnament(x - uy * off, y + ux * off, r);
+      o.sid = stroke.id;
       pending.push(o);
       stroke.ornaments.push(o);
       stroke.nextOrn = r * rand(1.1, 2.1);
@@ -761,7 +810,69 @@ canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; p
     for (const c of LAYERS) c.getContext('2d').clearRect(0, 0, W, H);
     lights = []; pending = []; glinters = []; stars = []; particles = []; flares = [];
     stroke = null; activeId = null;
+    undoStack.length = 0;
+    unwindHist();
+    updateUndo();
   }
+
+  // ---------- undo: one stroke at a time ----------
+  const undoBtn = document.getElementById('undo');
+  function updateUndo() { undoBtn.disabled = undoStack.length === 0; }
+
+  function undo() {
+    if (stroke) return;
+    const e = undoStack.pop();
+    if (!e) return;
+    pending = pending.filter(o => o.sid !== e.id);
+    glinters = glinters.filter(o => o.sid !== e.id);
+    lights = lights.filter(l => l.sid !== e.id);
+    stars = stars.filter(s => s.sid !== e.id);
+    flares = [];
+    LAYERS.forEach((c, i) => {
+      const g = c.getContext('2d');
+      g.save();
+      g.setTransform(1, 0, 0, 1, 0, 0);
+      g.globalCompositeOperation = 'source-over';
+      g.globalAlpha = 1;
+      g.clearRect(e.x, e.y, e.crops[i].width, e.crops[i].height);
+      g.drawImage(e.crops[i], e.x, e.y);
+      g.restore();
+    });
+    burst(e.cx, e.cy, 14, 1.6);
+    updateUndo();
+  }
+
+  // The browser / phone back button undoes the last stroke too (only when the page is
+  // opened directly, not inside an embedded preview).
+  let useHist = false, histDepth = 0, skipPop = false;
+  try { useHist = window.top === window && !!window.history.pushState; } catch (err) { useHist = false; }
+  function pushHist() {
+    if (!useHist) return;
+    try { window.history.pushState({ treeBrush: sidSeq }, ''); histDepth++; } catch (err) { useHist = false; }
+  }
+  function unwindHist() {
+    if (!useHist || histDepth === 0) return;
+    skipPop = true;
+    const n = histDepth; histDepth = 0;
+    window.history.go(-n);
+  }
+  addEventListener('popstate', () => {
+    if (skipPop) { skipPop = false; return; }
+    if (histDepth > 0) histDepth--;
+    undo();
+  });
+  function requestUndo() {
+    if (!undoStack.length || stroke) return;
+    if (useHist && histDepth > 0) window.history.back();
+    else undo();
+  }
+  undoBtn.addEventListener('click', requestUndo);
+  addEventListener('keydown', e => {
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === 'z') {
+      e.preventDefault();
+      requestUndo();
+    }
+  });
   document.getElementById('clear').addEventListener('click', clearAll);
   document.getElementById('replay').addEventListener('click', () => { clearAll(); startDemo(); });
 
